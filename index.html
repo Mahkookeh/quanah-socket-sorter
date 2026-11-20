@@ -46,6 +46,9 @@ input[type=number]{width:70px}
 .gem.purple{background:radial-gradient(circle at 35% 30%,#d6b4ff,var(--g-purple) 55%,#43206e)}
 .gem.blue{background:radial-gradient(circle at 35% 30%,#a9c4ff,var(--g-blue) 55%,#173a86)}
 .gem.prismatic{background:conic-gradient(#ff6b6b,#ffd166,#6ee7a8,#5aa9ff,#c084fc,#ff6b6b);box-shadow:0 0 0 2px #fff3 inset}
+.gem.unknown{background:#2a2f3c;border:2px solid #ff4fa3}
+.gem.unknown::before{content:"?";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:700 12px/1 Inter,sans-serif;color:#ff8cc6}
+.gem.sm.unknown::before{font-size:9px}
 .gem.unusable{opacity:.35;filter:grayscale(.4)}
 .gem.unusable::after{content:"";position:absolute;left:-3px;right:-3px;top:50%;height:2px;background:#fff;transform:rotate(-40deg);opacity:.8}
 .gem.sm{width:14px;height:14px;border-width:1px}
@@ -85,13 +88,16 @@ button.gem:hover{outline:2px solid var(--accent);outline-offset:2px}
 .pill.keep{color:var(--keep);border-color:#3ddc8466;background:#3ddc8414}
 .pill.backup{color:var(--backup);border-color:#f2a33a66;background:#f2a33a14}
 .pill.trash{color:var(--trash);border-color:#e5484d66;background:#e5484d14}
+.pill.verify{color:#ff7cbd;border-color:#ff4fa366;background:#ff4fa314}
 .pill.unk{color:var(--unk);border-color:#a78bfa66;background:#a78bfa14}
 .stage{position:relative;border-radius:8px;overflow:hidden;background:#000;user-select:none}
 .stage img{display:block;width:100%}
-.box{position:absolute;border:2px solid transparent;border-radius:4px;cursor:pointer}
+.box{position:absolute;border:2px solid transparent;border-radius:4px;cursor:pointer;pointer-events:auto}
 .box .tag{position:absolute;left:50%;bottom:-2px;transform:translate(-50%,0);font:700 10px/1 Inter,sans-serif;padding:2px 4px;border-radius:3px;white-space:nowrap;letter-spacing:.03em}
 .box.keep{border-color:var(--keep);box-shadow:0 0 0 2px #3ddc8455,0 0 14px #3ddc84aa}
 .box.keep .tag{background:var(--keep);color:#04210f}
+.box.verify{border-color:#ff4fa3;box-shadow:0 0 0 2px #ff4fa355,0 0 14px #ff4fa3aa}
+.box.verify .tag{background:#ff4fa3;color:#2a0016}
 .box.backup{border-color:var(--backup)}
 .box.backup .tag{background:var(--backup);color:#2a1700}
 .box.trash{border-color:#e5484d99}
@@ -128,7 +134,7 @@ button.gem:hover{outline:2px solid var(--accent);outline-offset:2px}
 .classwarn strong.big{display:block;font:700 19px/1.2 "Barlow Condensed",sans-serif;letter-spacing:.03em;text-transform:uppercase;color:#ff8a8d;margin-bottom:3px}
 .classwarn code{background:#0006;border-radius:4px;padding:1px 6px;color:#fff;font-weight:600}
 .jobchk{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;color:#ff8a8d;background:#e5484d1f;border:1px solid #e5484d66;border-radius:999px;padding:2px 8px;margin-top:4px}
-.box.keep .tag::after,.box.backup .tag::after{content:" ⚠"}
+.box.keep .tag::after,.box.backup .tag::after,.box.verify .tag::after{content:" ⚠"}
 .callout{background:#a78bfa14;border:1px solid #a78bfa55;border-radius:8px;padding:12px;margin:12px 0}
 .callout h3{color:var(--unk);margin-bottom:6px}
 
@@ -260,9 +266,9 @@ const Core = (() => {
   }
 
   // Inventory cell background is a flat light gray (~229).
-  function isCellBg(r, g, b) { const mx = Math.max(r, g, b), mn = Math.min(r, g, b); return mx - mn <= 10 && mn >= 214 && mx <= 236; }
+  function isCellBg(r, g, b) { const mx = Math.max(r, g, b), mn = Math.min(r, g, b); return mx - mn <= 10 && mn >= 218 && mx <= 233; }
   // Socket strip is a flat mid gray (~0x7b-0x8f).
-  function isBand(r, g, b) { const mx = Math.max(r, g, b), mn = Math.min(r, g, b); return mx - mn <= 12 && mn >= 108 && mx <= 156; }
+  function isBand(r, g, b) { const mx = Math.max(r, g, b), mn = Math.min(r, g, b); return mx - mn <= 12 && mn >= 218 && mx <= 233; }
 
   function detectGrid(img, roi) {
     const x0 = roi ? roi.x : 0, y0 = roi ? roi.y : 0, x1 = roi ? roi.x + roi.w : img.w, y1 = roi ? roi.y + roi.h : img.h;
@@ -295,25 +301,49 @@ const Core = (() => {
   }
 
   // Find the gray socket strip inside a coarse cell. Returns band box or null.
+  // Dominant light background color of a cell (gray normally, cyan when the item was just picked up).
+  function cellBg(img, c) {
+    const counts = new Map();
+    const y0 = Math.round(c.y + c.h * 0.80), y1 = Math.round(c.y + c.h * 0.94);
+    const x0 = Math.round(c.x + c.w * 0.08), x1 = Math.round(c.x + c.w * 0.92);
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+      if (x < 0 || y < 0 || x >= img.w || y >= img.h) continue;
+      const p = px(img, x, y); const k = (p[0] >> 3) + ',' + (p[1] >> 3) + ',' + (p[2] >> 3);
+      const e = counts.get(k); if (e) { e.n++; e.r += p[0]; e.g += p[1]; e.b += p[2]; } else counts.set(k, { n: 1, r: p[0], g: p[1], b: p[2] });
+    }
+    let best = null; counts.forEach(e => { if (!best || e.n > best.n) best = e; });
+    if (!best) return [229, 229, 229];
+    const bg = [best.r / best.n, best.g / best.n, best.b / best.n];
+    return Math.max(...bg) > 170 ? bg : [229, 229, 229];
+  }
+  // The socket strip is the cell background darkened ~0.58x in every channel.
+  function bandTest(bg) {
+    return (r, g, b) => {
+      const q = [r / bg[0], g / bg[1], b / bg[2]];
+      const mx = Math.max(...q), mn = Math.min(...q);
+      return mn >= 0.46 && mx <= 0.70 && mx - mn <= 0.09;
+    };
+  }
+
   function findBand(img, c) {
+    const bg = cellBg(img, c);
+    const isB = bandTest(bg);
     const pad = Math.round(c.w * 0.05);
     const bx0 = Math.max(0, c.x - pad), bx1 = Math.min(img.w - 1, c.x + c.w + pad);
     const by0 = Math.max(0, c.y - 2 * pad), by1 = Math.min(img.h - 1, c.y + Math.round(c.h * 0.55));
     const bw = bx1 - bx0;
     let top = -1;
     for (let y = by0; y < by1; y++) {
-      let n = 0; for (let x = bx0; x < bx1; x++) if (isBand(...px(img, x, y))) n++;
+      let n = 0; for (let x = bx0; x < bx1; x++) if (isB(...px(img, x, y))) n++;
       if (n / bw > 0.5) { top = y; break; }
     }
     if (top < 0) return null;
-    // columns that are mostly band-gray over the strip height (gems only cover part of each column)
     const hh = Math.max(4, Math.round(c.w * 0.16));
     const frac = [];
     for (let x = bx0; x < bx1; x++) {
-      let n = 0; for (let y = top; y < top + hh; y++) if (isBand(...px(img, x, y))) n++;
+      let n = 0; for (let y = top; y < top + hh; y++) if (isB(...px(img, x, y))) n++;
       frac.push(n / hh);
     }
-    // contiguous span of columns, allowing short gaps (gems), anchored at the strongest region
     let left = -1, right = -1, best = 0, s = -1, gap = 0, cnt = 0;
     const maxGap = Math.max(3, Math.round(c.w * 0.4));
     for (let i = 0; i <= frac.length; i++) {
@@ -331,7 +361,12 @@ const Core = (() => {
     if (left < 0) return null;
     const W = right - left + 1;
     if (W < c.w * 0.6) return null;
-    return { x: bx0 + left, y: top, w: W };
+    // strip color (median of the clean top rows) for tint normalization
+    const vals = [[], [], []];
+    for (let y = top + 1; y < top + 3; y++) for (let x = bx0 + left; x <= bx0 + right; x++) { const p = px(img, x, y); if (isB(...p)) for (let k = 0; k < 3; k++) vals[k].push(p[k]); }
+    const tint = vals.map(v => v.length ? median(v) : 0x84);
+    const highlighted = !(Math.max(...bg) - Math.min(...bg) <= 14);
+    return { x: bx0 + left, y: top, w: W, tint, highlighted, bg };
   }
 
   // Socket layouts as fraction of strip width (measured from the game UI).
@@ -351,13 +386,21 @@ const Core = (() => {
   }
 
   // Horizontal centers (fraction of strip width) of gems, found from the clean top rows of the strip.
+  // Undo the strip tint so a cyan-highlighted strip reads like the normal gray one.
+  function npx(img, band, x, y) {
+    const p = px(img, x, y), t = band.tint || [0x84, 0x84, 0x84];
+    return [0, 1, 2].map(i => Math.max(0, Math.min(255, p[i] - t[i] + 0x84)));
+  }
+  // The blinking "new item" dot: hot pink (~255,72,132).
+  function isDot(r, g, b) { return r > 200 && g < 120 && b > 95 && b < 175 && r - b > 70; }
+
   function gemCenters(img, band) {
     const W = band.w;
     const ya = band.y + Math.round(W * 0.06), yb = band.y + Math.round(W * 0.13);
     const prof = [];
     for (let x = band.x; x < band.x + W; x++) {
       let n = 0;
-      for (let y = ya; y <= yb; y++) { const [R, G, B] = px(img, x, y); if (Math.abs(R - 0x85) + Math.abs(G - 0x85) + Math.abs(B - 0x85) > 45) n++; }
+      for (let y = ya; y <= yb; y++) { const [R, G, B] = npx(img, band, x, y); if (isDot(...px(img, x, y))) continue; if (Math.abs(R - 0x85) + Math.abs(G - 0x85) + Math.abs(B - 0x85) > 45) n++; }
       prof.push(n / (yb - ya + 1));
     }
     const out = []; let s = -1;
@@ -384,15 +427,21 @@ const Core = (() => {
     if (f(k.R) >= 0.15) return 'red';
     if (f(k.P) >= 0.26) return 'purple';
     if (f(k.B) >= 0.28) return 'blue';
-    if (f(k.B) >= 0.08 && f(k.P) >= 0.02) return 'prismatic';
+    // Prismatic rings carry a little green/purple plus yellow; grey gems carry essentially none (holds down to ~40px slots).
+    if (f(k.B) >= 0.08 && (k.P + k.G) >= 2 && f(k.P + k.G) >= 0.015 && k.Y >= 1) return 'prismatic';
     if (f(k.B) >= 0.08) return 'grey';
     return null;
   }
 
   function readItem(img, band) {
     const n = socketCount(img, band);
-    if (!n) return [];
-    return LAYOUT[n].map(f => classify(gemFeatures(img, band, f)));
+    if (!n) return { socks: [], newDot: false };
+    const feats = LAYOUT[n].map(f => gemFeatures(img, band, f));
+    // dot in the top-left corner of the strip?
+    let dot = 0, tot = 0;
+    for (let y = band.y; y < band.y + band.w * 0.3; y++) for (let x = band.x; x < band.x + band.w * 0.35; x++) { tot++; if (isDot(...px(img, x, y))) dot++; }
+    const newDot = dot / tot > 0.03;
+    return { socks: feats.map(classify), newDot, dotOverFirst: newDot && feats[0].dot / feats[0].n > 0.04, highlighted: band.highlighted };
   }
 
   // Color features of one gem: hue-bucket counts among saturated pixels around it.
@@ -400,9 +449,11 @@ const Core = (() => {
     const W = band.w, cx = Math.round(band.x + f * W);
     const rx = Math.round(W * 0.12);
     const ya = band.y + 1, yb = band.y + Math.round(W * 0.24);
-    const k = { B: 0, G: 0, P: 0, R: 0, Y: 0, O: 0, dark: 0, n: 0 };
+    const k = { B: 0, G: 0, P: 0, R: 0, Y: 0, O: 0, dot: 0, n: 0 };
     for (let y = ya; y <= yb; y++) for (let x = cx - rx; x <= cx + rx; x++) {
-      const [R, G, B] = px(img, x, y); k.n++;
+      k.n++;
+      if (isDot(...px(img, x, y))) { k.dot++; continue; }
+      const [R, G, B] = npx(img, band, x, y);
       const [h, s, v] = hsv(R, G, B);
       if (s < 0.22 || v < 0.18) continue;
       if (h >= 195 && h < 252) k.B++;
@@ -418,14 +469,19 @@ const Core = (() => {
   // Icon fingerprint: area-averaged 8x6 RGB grid of the item art below the socket strip.
   const FP_W = 8, FP_H = 6;
   function fingerprint(img, band) {
-    const W = band.w;
+    const W = band.w, bgc = band.bg;
     const x0 = band.x + W * 0.1, x1 = band.x + W * 0.9, y0 = band.y + W * 0.36, y1 = band.y + W * 0.96;
     const out = [];
     for (let j = 0; j < FP_H; j++) for (let i = 0; i < FP_W; i++) {
       const xa = Math.round(x0 + (x1 - x0) * i / FP_W), xb = Math.round(x0 + (x1 - x0) * (i + 1) / FP_W);
       const ya = Math.round(y0 + (y1 - y0) * j / FP_H), yb = Math.round(y0 + (y1 - y0) * (j + 1) / FP_H);
       let r = 0, g = 0, b = 0, n = 0;
-      for (let y = ya; y < yb; y++) for (let x = xa; x < xb; x++) { const p = px(img, x, y); r += p[0]; g += p[1]; b += p[2]; n++; }
+      for (let y = ya; y < yb; y++) for (let x = xa; x < xb; x++) {
+        let p = px(img, x, y);
+        // treat the cell background (gray or cyan highlight) as plain gray so highlighted items still match
+        if (bgc && Math.abs(p[0] - bgc[0]) + Math.abs(p[1] - bgc[1]) + Math.abs(p[2] - bgc[2]) < 40) p = [229, 229, 229];
+        r += p[0]; g += p[1]; b += p[2]; n++;
+      }
       n = n || 1; out.push(Math.round(r / n), Math.round(g / n), Math.round(b / n));
     }
     return out;
@@ -456,7 +512,7 @@ const ARCHES = [
 const JOB = { warrior: 'Warrior', archer: 'Bowman', thief: 'Thief', mage: 'Magician', pirate_str: 'Pirate', pirate_dex: 'Pirate' };
 const ARCH = Object.fromEntries(ARCHES.map(a => [a.id, a]));
 const COLORS = ['red', 'green', 'grey', 'purple', 'blue', 'prismatic'];
-const CNAME = { red: 'Red', green: 'Green', grey: 'Grey', purple: 'Purple', blue: 'Blue', prismatic: 'Prismatic' };
+const CNAME = { red: 'Red', green: 'Green', grey: 'Grey', purple: 'Purple', blue: 'Blue', prismatic: 'Prismatic', unknown: 'Unreadable' };
 const MATCH_T = 18;
 
 // ---------- state & persistence ----------
@@ -563,8 +619,8 @@ const $ = id => document.getElementById(id);
 function gemEl(c, { sm = false, btn = false, title = '' } = {}) {
   const el = document.createElement(btn ? 'button' : 'span');
   el.className = 'gem' + (sm ? ' sm' : '') + ' ' + (c || 'empty');
-  if (c && c !== 'prismatic' && !usableSet().has(c)) el.classList.add('unusable');
-  el.title = title || (c ? CNAME[c] + (c !== 'prismatic' && !usableSet().has(c) ? ' (not usable for ' + ARCH[S.arch].name + ')' : '') : 'Empty');
+  if (c && c !== 'prismatic' && c !== 'unknown' && !usableSet().has(c)) el.classList.add('unusable');
+  el.title = title || (c ? CNAME[c] + (c !== 'prismatic' && c !== 'unknown' && !usableSet().has(c) ? ' (not usable for ' + ARCH[S.arch].name + ')' : '') : 'Empty');
   return el;
 }
 
@@ -697,10 +753,14 @@ function runScan(roi) {
     if (c.x < 0 || c.y < 0 || c.x + c.w >= img.w || c.y + c.h >= img.h) continue;
     const b = Core.findBand(img, c);
     if (!b) continue;
-    const socks = Core.readItem(img, b);
-    if (!socks.length) continue;
+    const r = Core.readItem(img, b);
+    if (!r.socks.length) continue;
+    let socks = r.socks.map(x => x || 'unknown');
+    let flag = null;
+    if (r.highlighted) { socks = socks.map(() => 'unknown'); flag = 'highlight'; }
+    else if (r.dotOverFirst) { socks[0] = 'unknown'; flag = 'dot'; }
     const s3 = [socks[0] || null, socks[1] || null, socks[2] || null];
-    items.push({ row: c.row, col: c.col, band: b, socks: s3, fp: Core.fingerprint(img, b), slot: null, typeId: null });
+    items.push({ row: c.row, col: c.col, band: b, socks: s3, fp: Core.fingerprint(img, b), slot: null, typeId: null, flag, newItem: r.newDot || r.highlighted });
   }
   SCAN.grid = grid; SCAN.items = items; SCAN.sel = null;
   if (!grid || !items.length) {
@@ -747,10 +807,25 @@ function evaluate() {
   items.forEach(it => {
     const e = it.ev;
     if (it.slot === 'ignore') { it.verdict = 'ignore'; it.reason = 'Marked as not armor.'; return; }
+    const unk = it.socks.filter(c => c === 'unknown').length;
+    if (unk && e.n === 3) {
+      const knownBad = it.socks.filter(c => c && c !== 'unknown' && c !== 'prismatic' && !usableSet().has(c)).length;
+      if (!knownBad) {
+        it.verdict = 'verify';
+        it.reason = it.flag === 'highlight' && !it.edited
+          ? "Just picked up: the cyan highlight hides the gem colors. Hover it in-game (that clears the highlight) and rescan, or click its sockets here to fill them in."
+          : `The new-item dot covers ${unk > 1 ? 'some sockets' : 'the 1st socket'}; the rest are usable. Check ${unk > 1 ? 'them' : 'it'} in-game, then click the ? to fill it in.`;
+        return;
+      }
+    }
     if (!e.q) {
       it.verdict = 'trash';
-      const bad = it.socks.filter(c => c && c !== 'prismatic' && !usableSet().has(c)).map(c => CNAME[c]);
-      it.reason = e.n < 3 ? `Only ${e.n} socket${e.n > 1 ? 's' : ''}.` : `${e.usable}/3 usable — ${[...new Set(bad)].join(' & ')} ${bad.length > 1 ? "aren't" : "isn't"} usable for ${ARCH[S.arch].name}.`;
+      const bad = it.socks.filter(c => c && c !== 'prismatic' && c !== 'unknown' && !usableSet().has(c)).map(c => CNAME[c]);
+      const ub = [...new Set(bad)];
+      const have = it.socks.filter(Boolean).map(c => CNAME[c] || '?').join(' + ');
+      it.reason = e.n < 3
+        ? `Only ${e.n} socket${e.n > 1 ? 's' : ''} (${have}). Needs 3 usable sockets — a ${e.n}-socket piece can never reach 3/3, even if every gem on it is usable.`
+        : `${e.usable}/3 usable — ${ub.join(' & ')} ${ub.length > 1 ? "aren't" : "isn't"} usable for ${ARCH[S.arch].name}.`;
       return;
     }
     if (!it.slot) { it.verdict = 'unk'; it.reason = '3/3 usable — label this icon type (above) so I know which slot it competes for.'; return; }
@@ -804,12 +879,12 @@ function renderScan() {
   const job = JOB[S.arch];
   $('classWarn').innerHTML = `<div class="classwarn"><div class="ic">⚠️</div><div><strong class="big">Check the class before you keep anything</strong>
     Every class's version of an item looks <em>identical</em> in the inventory, so this scan can't tell them apart. Hover each <strong>KEEP</strong> / <strong>SPARE</strong> item in-game and make sure it says <code>Required Job: ${job}</code> (the name also ends in <code>(${job})</code>). A piece made for another class is useless to you even with perfect sockets.</div></div>`;
-  const cnt = { keep: 0, backup: 0, trash: 0, unk: 0 };
+  const cnt = { keep: 0, verify: 0, backup: 0, trash: 0, unk: 0 };
   items.forEach(it => { if (cnt[it.verdict] !== undefined) cnt[it.verdict]++; });
-  $('summary').innerHTML = `<span class="pill keep">● Keep ${cnt.keep}</span><span class="pill backup">● Spare ${cnt.backup}</span><span class="pill trash">● Trash ${cnt.trash}</span>` + (cnt.unk ? `<span class="pill unk">● Needs icon label ${cnt.unk}</span>` : '');
+  $('summary').innerHTML = `<span class="pill keep">● Keep ${cnt.keep}</span>` + (cnt.verify ? `<span class="pill verify">● Check ${cnt.verify}</span>` : '') + `<span class="pill backup">● Spare ${cnt.backup}</span><span class="pill trash">● Trash ${cnt.trash}</span>` + (cnt.unk ? `<span class="pill unk">● Needs icon label ${cnt.unk}</span>` : '');
 
   const boxes = $('boxes'); boxes.innerHTML = '';
-  const TAG = { keep: 'KEEP', backup: 'SPARE', trash: '✕', unk: '?', ignore: '' };
+  const TAG = { keep: 'KEEP', verify: 'CHECK', backup: 'SPARE', trash: '✕', unk: '?', ignore: '' };
   items.forEach(it => {
     if (it.verdict === 'ignore') return;
     const b = it.band, W = b.w;
@@ -826,7 +901,7 @@ function renderScan() {
   const dim = $('dim'); dim.width = R.w; dim.height = R.h;
   const dc = dim.getContext('2d'); dc.fillStyle = 'rgba(8,10,16,0.72)'; dc.fillRect(0, 0, R.w, R.h);
   items.forEach(it => {
-    if (!['keep', 'backup', 'unk'].includes(it.verdict)) return;
+    if (!['keep', 'verify', 'backup', 'unk'].includes(it.verdict)) return;
     const b = it.band; dc.clearRect(b.x - 3 - R.x, b.y - 3 - R.y, b.w + 6, b.w + 8);
   });
   $('stage').classList.toggle('focus', $('focus').checked);
@@ -844,7 +919,7 @@ function itemGems(it, editable) {
   });
   return w;
 }
-const VLABEL = { keep: '<span class="ok">Keep</span>', backup: '<span class="warn">Spare</span>', trash: '<span class="bad">Trash</span>', unk: '<span style="color:var(--unk)">Needs icon label</span>', ignore: '<span class="muted">Ignored</span>' };
+const VLABEL = { verify: '<span style="color:#ff7cbd">Check</span>', keep: '<span class="ok">Keep</span>', backup: '<span class="warn">Spare</span>', trash: '<span class="bad">Trash</span>', unk: '<span style="color:var(--unk)">Needs icon label</span>', ignore: '<span class="muted">Ignored</span>' };
 
 function renderDetail() {
   const d = $('detail'); d.innerHTML = '';
@@ -861,8 +936,9 @@ function renderDetail() {
   const l3 = document.createElement('span'); l3.className = 'small muted'; l3.textContent = 'Slot:';
   r3.append(l3, slotSelect(it.slot || '', v => { it.manualSlot = v; renderScan(); }));
   const r4 = document.createElement('div'); r4.className = 'small'; r4.style.marginBottom = '8px'; r4.textContent = it.reason;
+  if (it.newItem && !it.edited && it.verdict !== 'verify') r4.textContent += ' (Newly picked up: double-check the first socket in-game.)';
   body.append(r1, r2, r3, r4);
-  if (it.verdict === 'keep' || it.verdict === 'backup' || it.verdict === 'unk') {
+  if (['keep', 'backup', 'unk', 'verify'].includes(it.verdict)) {
     const w = document.createElement('div'); w.className = 'jobchk'; w.style.marginBottom = '8px';
     w.textContent = `⚠ Hover it in-game first: must say Required Job: ${JOB[S.arch]}`; body.appendChild(w);
   }
@@ -877,7 +953,7 @@ function renderDetail() {
 
 function renderLists() {
   const L = $('lists'); L.innerHTML = '';
-  const groups = [['keep', 'Keep these'], ['backup', 'Spares (3/3, not needed right now)'], ['unk', '3/3 but icon not labeled yet']];
+  const groups = [['keep', 'Keep these'], ['verify', 'Check these (new items — sockets partly hidden)'], ['backup', 'Spares (3/3, not needed right now)'], ['unk', '3/3 but icon not labeled yet']];
   groups.forEach(([v, title]) => {
     const its = SCAN.items.filter(it => it.verdict === v);
     if (!its.length) return;
