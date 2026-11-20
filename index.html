@@ -121,6 +121,12 @@ button.gem:hover{outline:2px solid var(--accent);outline-offset:2px}
 .type{display:flex;align-items:center;gap:8px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 8px}
 .type img{width:48px;border-radius:4px;background:#e5e5e5}
 .type.new{border-color:var(--unk);box-shadow:0 0 0 1px #a78bfa55}
+.classwarn{display:flex;gap:12px;align-items:flex-start;background:repeating-linear-gradient(-45deg,#e5484d22 0 12px,#e5484d10 12px 24px);border:2px solid var(--trash);border-radius:10px;padding:12px 14px;margin:12px 0}
+.classwarn .ic{font-size:26px;line-height:1}
+.classwarn strong.big{display:block;font:700 19px/1.2 "Barlow Condensed",sans-serif;letter-spacing:.03em;text-transform:uppercase;color:#ff8a8d;margin-bottom:3px}
+.classwarn code{background:#0006;border-radius:4px;padding:1px 6px;color:#fff;font-weight:600}
+.jobchk{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;color:#ff8a8d;background:#e5484d1f;border:1px solid #e5484d66;border-radius:999px;padding:2px 8px;margin-top:4px}
+.box.keep .tag::after,.box.backup .tag::after{content:" ⚠"}
 .callout{background:#a78bfa14;border:1px solid #a78bfa55;border-radius:8px;padding:12px;margin:12px 0}
 .callout h3{color:var(--unk);margin-bottom:6px}
 
@@ -177,11 +183,12 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px}
           <div><button class="btn sm hidden" id="newScan">New screenshot</button></div>
         </div>
         <div class="drop" id="drop">
-          <div style="font-size:15px"><strong>Paste (Ctrl+V)</strong>, drop, or <label class="linkbtn" style="font-size:15px;cursor:pointer">choose a screenshot<input id="file" type="file" accept="image/*" class="hidden"></label></div>
+          <div style="font-size:15px"><strong>Paste (Ctrl+V)</strong>, drop, or <label class="linkbtn" style="font-size:15px;cursor:pointer">choose a screenshot<input id="file" type="file" accept="image/*,.png,.jpg,.jpeg,.bmp,.webp" class="hidden"></label></div>
           <div class="small" style="margin-top:6px">Open the <strong>Equip</strong> tab with the whole item grid visible. Full-screen screenshots are fine.</div>
         </div>
         <div id="scanStatus" class="small muted" style="margin-top:8px"></div>
         <div id="result" class="hidden">
+          <div id="classWarn"></div>
           <div id="labelCallout"></div>
           <div class="summary" id="summary"></div>
           <div class="toolbar">
@@ -444,6 +451,7 @@ const ARCHES = [
   { id: 'pirate_str', name: 'Pirate (STR)', use: ['red', 'green', 'grey'] },
   { id: 'pirate_dex', name: 'Pirate (DEX)', use: ['red', 'green', 'grey', 'purple'] },
 ];
+const JOB = { warrior: 'Warrior', archer: 'Bowman', thief: 'Thief', mage: 'Magician', pirate_str: 'Pirate', pirate_dex: 'Pirate' };
 const ARCH = Object.fromEntries(ARCHES.map(a => [a.id, a]));
 const COLORS = ['red', 'green', 'grey', 'purple', 'blue', 'prismatic'];
 const CNAME = { red: 'Red', green: 'Green', grey: 'Grey', purple: 'Purple', blue: 'Blue', prismatic: 'Prismatic' };
@@ -639,20 +647,31 @@ function slotSelect(val, onChange, allowDelete) {
 
 // ---------- scanning ----------
 let SCAN = null; // { img, url, cells, items, region, sel }
-function loadFile(file) {
-  if (!file || !file.type.startsWith('image/')) return;
-  const url = URL.createObjectURL(file);
-  const im = new Image();
-  im.onload = () => {
-    const c = document.createElement('canvas'); c.width = im.naturalWidth; c.height = im.naturalHeight;
-    const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(im, 0, 0);
-    const d = ctx.getImageData(0, 0, c.width, c.height);
-    SCAN = { img: { data: d.data, w: c.width, h: c.height }, canvas: c, items: [], sel: null };
-    $('scanStatus').innerHTML = '<span class="spinner"></span> Reading sockets…';
-    setTimeout(() => runScan(null), 30);
-  };
-  im.onerror = () => { $('scanStatus').textContent = "Couldn't open that image."; };
-  im.src = url;
+async function decodeImage(file) {
+  // 1) createImageBitmap: no URLs involved, works inside sandboxed frames
+  if (window.createImageBitmap) { try { return await createImageBitmap(file); } catch (e) {} }
+  // 2) data: URL via FileReader (allowed everywhere blob: may not be)
+  const dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(file); });
+  return await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => rej(new Error('decode')); im.src = dataUrl; });
+}
+async function loadFile(file) {
+  if (!file) return;
+  const name = file.name || 'pasted image', type = file.type || 'unknown type';
+  if (/hei[cf]/i.test(type) || /\.hei[cf]$/i.test(name)) { $('scanStatus').innerHTML = `<span class="bad">${name} is HEIC, which browsers can't read.</span> Save it as PNG or JPG, or paste a screenshot with Ctrl+V.`; return; }
+  $('scanStatus').innerHTML = '<span class="spinner"></span> Opening image…';
+  let src;
+  try { src = await decodeImage(file); }
+  catch (e) { $('scanStatus').innerHTML = `<span class="bad">Couldn't open ${name} (${type}).</span> Try a PNG or JPG, or take the screenshot and paste it here with Ctrl+V.`; return; }
+  try {
+    const w = src.naturalWidth || src.width, h = src.naturalHeight || src.height;
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(src, 0, 0);
+    if (src.close) src.close();
+    const d = ctx.getImageData(0, 0, w, h);
+    SCAN = { img: { data: d.data, w, h }, canvas: c, items: [], sel: null };
+  } catch (e) { $('scanStatus').innerHTML = `<span class="bad">Opened ${name} but couldn't read its pixels (${e && e.name || 'error'}).</span> Try pasting the screenshot with Ctrl+V instead.`; return; }
+  $('scanStatus').innerHTML = '<span class="spinner"></span> Reading sockets…';
+  setTimeout(() => runScan(null), 30);
 }
 
 function thumbOf(b) {
@@ -780,6 +799,9 @@ function renderScan() {
     box.appendChild(tw); cw.appendChild(box);
   }
 
+  const job = JOB[S.arch];
+  $('classWarn').innerHTML = `<div class="classwarn"><div class="ic">⚠️</div><div><strong class="big">Check the class before you keep anything</strong>
+    Every class's version of an item looks <em>identical</em> in the inventory, so this scan can't tell them apart. Hover each <strong>KEEP</strong> / <strong>SPARE</strong> item in-game and make sure it says <code>Required Job: ${job}</code> (the name also ends in <code>(${job})</code>). A piece made for another class is useless to you even with perfect sockets.</div></div>`;
   const cnt = { keep: 0, backup: 0, trash: 0, unk: 0 };
   items.forEach(it => { if (cnt[it.verdict] !== undefined) cnt[it.verdict]++; });
   $('summary').innerHTML = `<span class="pill keep">● Keep ${cnt.keep}</span><span class="pill backup">● Spare ${cnt.backup}</span><span class="pill trash">● Trash ${cnt.trash}</span>` + (cnt.unk ? `<span class="pill unk">● Needs icon label ${cnt.unk}</span>` : '');
@@ -832,9 +854,13 @@ function renderDetail() {
   r3.append(l3, slotSelect(it.slot || '', v => { it.manualSlot = v; renderScan(); }));
   const r4 = document.createElement('div'); r4.className = 'small'; r4.style.marginBottom = '8px'; r4.textContent = it.reason;
   body.append(r1, r2, r3, r4);
+  if (it.verdict === 'keep' || it.verdict === 'backup' || it.verdict === 'unk') {
+    const w = document.createElement('div'); w.className = 'jobchk'; w.style.marginBottom = '8px';
+    w.textContent = `⚠ Hover it in-game first: must say Required Job: ${JOB[S.arch]}`; body.appendChild(w);
+  }
   if (it.slot && SLOT_NAME[it.slot] && it.ev.n) {
     const btn = document.createElement('button'); btn.className = 'btn sm' + (it.verdict === 'keep' ? ' primary' : '');
-    btn.textContent = `I equipped this — set as my ${SLOT_NAME[it.slot]}`;
+    btn.textContent = `It's a ${JOB[S.arch]} item & I equipped it — set as my ${SLOT_NAME[it.slot]}`;
     btn.onclick = () => { gear()[it.slot] = [...it.socks]; it.verdict = 'owned'; save(); renderAll(); };
     body.appendChild(btn);
   }
@@ -855,6 +881,7 @@ function renderLists() {
       const mid = document.createElement('div');
       mid.innerHTML = `<div><strong>${it.slot && SLOT_NAME[it.slot] ? SLOT_NAME[it.slot] : 'Unknown'}</strong> <span class="meta">row ${it.row + 1}, col ${it.col + 1}</span></div>`;
       mid.appendChild(itemGems(it, false));
+      const jc = document.createElement('div'); jc.className = 'jobchk'; jc.textContent = `⚠ Check: Required Job ${JOB[S.arch]}`; mid.appendChild(jc);
       const rs = document.createElement('div'); rs.className = 'meta'; rs.style.maxWidth = '260px'; rs.textContent = it.reason;
       li.append(img, mid, rs);
       li.onclick = () => { SCAN.sel = it; renderScan(); $('stage').scrollIntoView({ block: 'nearest', behavior: 'smooth' }); };
@@ -904,9 +931,9 @@ $('newScan').onclick = () => { SCAN = null; $('result').classList.add('hidden');
 const drop = $('drop');
 ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
 ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
-drop.addEventListener('drop', e => { const f = [...(e.dataTransfer.files || [])].find(f => f.type.startsWith('image/')); if (f) loadFile(f); });
+drop.addEventListener('drop', e => { const f = [...(e.dataTransfer.files || [])][0]; if (f) loadFile(f); });
 document.addEventListener('dragover', e => e.preventDefault());
-document.addEventListener('drop', e => { if (!drop.contains(e.target)) { e.preventDefault(); const f = [...(e.dataTransfer.files || [])].find(f => f.type.startsWith('image/')); if (f) loadFile(f); } });
+document.addEventListener('drop', e => { if (!drop.contains(e.target)) { e.preventDefault(); const f = [...(e.dataTransfer.files || [])][0]; if (f) loadFile(f); } });
 window.addEventListener('paste', e => {
   const it = [...(e.clipboardData && e.clipboardData.items || [])].find(i => i.type.startsWith('image/'));
   if (it) { e.preventDefault(); loadFile(it.getAsFile()); }
